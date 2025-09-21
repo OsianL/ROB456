@@ -100,17 +100,22 @@ def convert_x_y_to_pix(im_size, x_y, size_pix):
     return pix
 
 
-def is_reachable(im, pix):
+def is_underexplored(im, pix):
     """ Is the pixel reachable, i.e., has a neighbor that is free?
     Used for
     @param im - the image
     @param pix - the pixel i,j"""
 
-    # Returns True (the pixel is adjacent to a pixel that is free)
-    #  False otherwise
-    # You can use four or eight connected - eight will return more points
-    # YOUR CODE HERE
-    return False
+    #Note, this has a potential edgecase failure at the edges of the image, where it 'wraps around' and could give an invalid result.
+    #For now I will ignore this problem...
+
+    #Hardcoding these to avoid for loops ig
+    values_to_check = np.array([im[pix[1]-1,pix[0]-1],im[pix[1]-1,pix[0]],im[pix[1]-1,pix[0]+1],im[pix[1],pix[0]-1],
+                       im[pix[1],pix[0]+1],im[pix[1]+1,pix[0]-1],im[pix[1]+1,pix[0]],im[pix[1]+1,pix[0]+1]])
+
+    #Return true if any are true
+    return np.any(values_to_check == 128)
+
 
 
 def find_all_possible_goals(im):
@@ -120,7 +125,33 @@ def find_all_possible_goals(im):
     @param im - thresholded image
     @return dictionary or list or binary image of possible pixels"""
 
-    # YOUR CODE HERE
+    #Setup a list we can append points to
+    possible_goals = []
+
+    #First, Find all the image locations marked as open
+    open_locs = np.argwhere(im == 255)
+
+    #Then, check each of these for locations with unexplored neighbors.
+    for i in range(1,len(open_locs)):
+
+        point = open_locs[i]
+
+        #check for and ignore points that are on the absolute edge of the map, 
+        #if we really need to go there we can assume the map will expand/resize
+        if point[0]+1 == im.shape[0] or point[1]+1 == im.shape[1]:
+            continue
+
+        pix = [point[1],point[0]]
+
+        #check if the point has unexplored neighbors and append it to the list if so
+        if is_underexplored(im,pix):
+            possible_goals.append(pix)
+
+    return possible_goals
+
+    #The list we want is the combination of these two (unexplored AND free neighbors)
+    #I feel like there is a way to use np.argwhere to get a list of just these points. 
+    #The hard point is getting an image which highlights just the points with free neighbors. A problem for the future.
 
 
 def find_best_point(im, possible_points, robot_loc):
@@ -129,7 +160,35 @@ def find_best_point(im, possible_points, robot_loc):
     @param possible_points - possible points to chose from
     @param robot_loc - location of the robot (in case you want to factor that in)
     """
-    # YOUR CODE HERE
+
+    #Becuase this is written as a function and not part of a class, any blacklisting/filtering of points will need to be done elsewhere
+    #e.g. if we need to prevent the same unreachable point from being selected over and over, this will need to be handled externally.
+    
+    #Biggest unexplored area feels like the optimal choice for exploration, but seems hard to implement
+    #Closest to the robot seems good for minimizing driving time/energy, but means it may focus on unimportant details over the bigger map...
+    #Some external filtering will be required in the future to avoid this pitfall.
+
+    #having a minimum distance lets us tune this to not pick a point basically at the robot
+    #presumably, if there is an unexplored point directly at the robot, we can't get there or see it
+    min_dist = 50
+
+    #assume an absurdly large distance to start
+    closest_distance = 1e30
+    closest_pix = []
+    #just going to iterate over all possible points provided to find the closest one
+    #surely there is a more efficient way to do this but it's not worth thinking about
+    for i,pix in enumerate(possible_points):
+        #calculate the hypotenuse
+        dist = np.sqrt(((pix[0] - robot_loc[0])**2) + ((pix[1] - robot_loc[1])**2))
+        #continually update to find the closest pixel
+        if min_dist < dist < closest_distance:
+            closest_distance = dist
+            closest_pix = pix
+    
+    #return the best (closest) pixel:
+    #convert to tuple so it is immutable for feeding into path planning
+    #probably kinda hacky
+    return tuple(closest_pix)
 
 
 def find_waypoints(im, path):
@@ -138,8 +197,58 @@ def find_waypoints(im, path):
     @param path - the initial path
     @ return - a new path"""
 
-    # Again, no right answer here
-    # YOUR CODE HERE
+    #pick waypoints at 'corners'
+    #Initial idea: To detect a corner (change in direction) in the path, do a rough second derivative test,
+    #the idea here is that the path 'accelerates' only at corners/changes in direction
+    #Problem - path aliasing
+
+    #Better solution: - Create two vectors leading up to and away from each point
+    #Use the dot product definition to estimate the angle
+    
+    start_point = path[0]
+    end_point = path[-1]
+
+    waypoints = []
+    waypoints.append(start_point)
+
+    for i in range(4,len(path)-4):
+        #Vectors to compare
+        v_prev = np.array(path[i]) - np.array(path[i-4])
+        v_next = np.array(path[i+4]) - np.array(path[i])
+
+        #Dot product definition
+        v_angle = np.arccos(np.dot(v_prev,v_next)/(np.linalg.norm(v_prev)*np.linalg.norm(v_next)))
+        
+        #Also check the distance between this and the previous sampled waypoint
+        #This prevents us from having high point density at corners.
+        prev_dist = np.linalg.norm(np.array(waypoints[-1])-np.array(path[i]))
+
+        #lets give a 0.1 rad margin for angle error, and a min 10 pixel spacing:
+        epsilon = 0.3
+        min_dist = 5
+
+        if v_angle > epsilon and prev_dist > min_dist:
+            waypoints.append(path[i])
+
+        #Central differencing for 2nd derivative
+        #dd_dxdx = path[i+1][0]-2*path[i][0]+path[i-1][0]
+        #dd_dydy = path[i+1][1]-2*path[i][1]+path[i-1][1]
+
+        #check if 2nd derivative == 0
+        #The points in path should be integers by default, so we can use == instead of .isclose():
+        #if ((dd_dxdx == 0) and (dd_dydy == 0)):
+        #    pass
+        #else:
+        #    waypoints.append(path[i])
+    
+    #append the last waypoint:
+    waypoints.append(end_point)
+
+    #return the list of waypoints:
+    return waypoints
+         
+
+    
 
 if __name__ == '__main__':
     # Doing this here because it is a different yaml than JN

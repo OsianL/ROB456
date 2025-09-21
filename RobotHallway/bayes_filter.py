@@ -26,8 +26,12 @@ class BayesFilter:
         """ Initialize discrete probability resolution with uniform distribution
         @param n_bins - the number of bins to divide the unit interval (0,1) up into """
 
-        # TODO create an array with n_bins, set to uniform distribution
-        # YOUR CODE HERE
+        #create an array with n_bins, set to uniform distribution
+
+        #Starting value for each bin:
+        bin_start = 1/n_bins
+        #create the array of bins:
+        self.probabilities = np.ones(n_bins) * bin_start
 
     def update_belief_sensor_reading(self, world_ground_truth, robot_sensor, sensor_reading):
         """ Update your probabilities based on the sensor reading being true (door) or false (no door)
@@ -38,21 +42,57 @@ class BayesFilter:
         @param robot_sensor - has the robot sensor probabilities
         @param sensor_reading - the actual sensor reading - either True or False
         """
-        # bayes assignment
+        # Bayes assignment
         # Note: it's easier to implement this by making a new probabilities array, filling it up, then assigning the
         #  new values to self.probabilities during the normalization step (dividing by nu)
         # Don't forget to normalize - that's the divide by nu part. This is because all of the denominators in the
         #  update have the same value (which, conveniently, is the sum of the numerators)
 
-        # TODO
-        #  You'll need a for loop to loop over the bins
-        #  For each bin, calculate p(y|x) p(x) (the numerator of the Bayes sensor update)
-        #     p(x) is the value stored in self.probabilities[i]
-        #     p(y|x) is the 4-way if statement: In front of door, y/n, sensor T/F
-        #     You'll need to know if the bin is in front of the door or not to compute this
-        # You might find enumerate useful
-        #  for i, p in enumerate(self.probabilities):
-        # YOUR CODE HERE
+        #Create an array for our new state
+        new_probs = np.zeros_like(self.probabilities)
+
+        #Need a for loop to loop over the bins
+        #For each bin, calculate p(y|x) p(x) (the numerator of the Bayes sensor update)
+        for i in range(0,len(new_probs)):
+        
+            #bin width
+            bin_width = (1/len(new_probs))
+
+            #Current bin position:
+            bin_pose = (i+0.5) * bin_width
+
+            #p(x) is the value stored in self.probabilities[i]
+            bin_current_prob = self.probabilities[i]
+
+            #Check if the current bin is in front of a door in the map
+            bin_in_front_of_door = world_ground_truth.is_location_in_front_of_door(bin_pose)
+            
+            #p(y|x) is the 4-way if statement: In front of door, y/n, sensor T/F
+            #If we should be in front of the door according to the map
+            if (bin_in_front_of_door == True):
+                #check if we read a door on the sensor
+                if (sensor_reading == True):
+                    #Great
+                    prob_y_x = robot_sensor.door_dict["door"]["see_door_if_door"]
+                else:
+                    #Ruh Roh, where's the door???
+                    prob_y_x = robot_sensor.door_dict["door"]["see_no_door_if_door"]
+            #else if we aren't in front of the door according to the map
+            else:
+                #check if the sensor agrees:
+                if (sensor_reading == False):
+                    #Great
+                    prob_y_x = robot_sensor.door_dict["no_door"]["see_no_door_if_no_door"]
+                else:
+                    #Where'd this door come from???
+                    prob_y_x = robot_sensor.door_dict["no_door"]["see_door_if_no_door"]
+            
+            #calculate the numerator for this bin 
+            new_probs[i] = prob_y_x * bin_current_prob
+
+        #Normalize the new probabilities and set them
+        self.probabilities = new_probs/new_probs.sum()
+
 
     def update_belief_move_left(self, robot_ground_truth):
         """ Update the probabilities assuming a move left.
@@ -63,21 +103,65 @@ class BayesFilter:
         middle bins - you'll have to special-case the transitions at the first and last bins
         @param robot_ground_truth - robot location, has the probabilities for actually moving left if move_left called"""
 
-        # bayes assignment
-        # Note: it's easier to implement this by making a new probabilities array (filled with zeros) then assigning the
-        #  new values to self.probabilities during the normalization step
-        # Don't forget to normalize - but if you've done this correctly then the sum should be very, very close to
-        #  one already - any error is just numerical
+        move_l_probs = robot_ground_truth.move_probabilities["move_left"]
 
-        # YOUR CODE HERE
+        new_probs = np.zeros_like(self.probabilities)
+
+        #Progress from left to right and update all the bins
+        #first handle the LHS edge case:
+        new_probs[0] = (move_l_probs["left"] + move_l_probs["do_nothing"]) * self.probabilities[0] + move_l_probs["left"] * self.probabilities[1]
+
+        #now handle all the middle cases:
+        for i in range(1,len(new_probs)-1):
+            bin_sum = 0
+            #sum all the probabilities that contribute to the robot being in this bin
+            for key, value in move_l_probs.items():
+                if (key == "right"):
+                    bin_sum += value * self.probabilities[i-1]
+                if (key == "do_nothing"):
+                    bin_sum += value * self.probabilities[i]
+                if (key == "left"):
+                    bin_sum += value * self.probabilities[i+1]
+            new_probs[i] = bin_sum
+
+        #now handle the RHS edge case:
+        new_probs[-1] = (move_l_probs["right"] + move_l_probs["do_nothing"]) * self.probabilities[-1] + move_l_probs["right"] * self.probabilities[-2]
+
+        #now normalize and set to self:
+        self.probabilities = new_probs/new_probs.sum()
+
 
     def update_belief_move_right(self, robot_ground_truth):
         """ Update the probabilities assuming a move right.
         Sames as above - but this time, transitions are stored in robot_ground_truth.move_probabilities["move_right"]
         @param robot_ground_truth - robot location, has the probabilities for actually moving left if move_left called"""
 
-        # bayes assignment
-        # YOUR CODE HERE
+        move_r_probs = robot_ground_truth.move_probabilities["move_right"]
+
+        new_probs = np.zeros_like(self.probabilities)
+
+        #Progress from left to right and update all the bins
+        #first handle the LHS edge case:
+        new_probs[0] = (move_r_probs["left"] + move_r_probs["do_nothing"]) * self.probabilities[0] + move_r_probs["left"] * self.probabilities[1]
+
+        #now handle all the middle cases:
+        for i in range(1,len(new_probs)-1):
+            bin_sum = 0
+            #sum all the probabilities that contribute to the robot being in this bin
+            for key, value in move_r_probs.items():
+                if (key == "right"):
+                    bin_sum += value * self.probabilities[i-1]
+                if (key == "do_nothing"):
+                    bin_sum += value * self.probabilities[i]
+                if (key == "left"):
+                    bin_sum += value * self.probabilities[i+1]
+            new_probs[i] = bin_sum
+
+        #now handle the RHS edge case:
+        new_probs[-1] = (move_r_probs["right"] + move_r_probs["do_nothing"]) * self.probabilities[-1] + move_r_probs["right"] * self.probabilities[-2]
+
+        #now normalize and set to self:
+        self.probabilities = new_probs/new_probs.sum()
 
     def one_full_update(self, world_ground_truth, robot_ground_truth, robot_sensor, u: str, z: bool):
         """This is the full update loop that takes in one action, followed by a sensor reading
@@ -92,10 +176,16 @@ class BayesFilter:
         @param u will be one of "move_left" or "move_right" (string)
         @param z will be one of True or False (door y/n)
         """
-        # TODO:
-        #  Step 1 predict: update your belief by the action (call one of update_belief_move_left or update_belief_move_right)
-        #  Step 2 correct: do the correction step (update belief by the sensor reading)
-        # YOUR CODE HERE
+        
+        #Step 1 predict: update your belief by the action (call one of update_belief_move_left or update_belief_move_right)
+        if (u == "move_left"):
+            self.update_belief_move_left(robot_ground_truth)
+        if (u == "move_right"):
+            self.update_belief_move_right(robot_ground_truth)
+
+        #Step 2 correct: do the correction step (update belief by the sensor reading)
+        self.update_belief_sensor_reading(world_ground_truth,robot_sensor,z)
+
 
 
 def check_uniform(bf):
@@ -338,7 +428,6 @@ if __name__ == '__main__':
     # The tests
     test_bayes_filter_sensor_update(b_print_test)
     test_move_one_direction(b_print_test)
-
 
     test_move_update(b_print_test)
 

@@ -40,7 +40,7 @@ class RobotGroundTruth:
         #    These will set the individual dictionaries
         self.set_move_left_probabilities()
         self.set_move_right_probabilities()
-        self.set_move_continuos_probabilities()
+        self.set_move_continuous_probabilities()
 
     def reset_location(self):
         """ Put robot in the middle of the hallway"""
@@ -57,37 +57,51 @@ class RobotGroundTruth:
         @param move_right - the probability of actually moving right """
 
         # Bayes assignment
-        # TODO
-        #   Set self.move_probabilities["move_left"] = {...} to be a dictionary with the above probabilities
-        #     Yes, you can store dictionaries in dictionaries
+        
         # Check that the probabilities sum to one and are between 0 and 1
+        if (move_left + move_right) > 1:
+            raise ValueError("Probabilities sum to great than one")
+        if not ((0 < move_left < 1) or (0 < move_right < 1)):
+            raise ValueError("Individual probabilities not within 0 and 1")
 
-        # YOUR CODE HERE
+        #Probability for doing nothing can be calculated from left and right probabilities
+        do_nothing = 1 - (move_left + move_right)
+
+        #   Set self.move_probabilities["move_left"] = {...} to be a dictionary with the above probabilities
+        self.move_probabilities["move_left"] =  {"left": move_left, "right": move_right, "do_nothing": do_nothing}
 
     def set_move_right_probabilities(self, move_left=0.05, move_right=0.8):
         """ Set the three discrete probabilities for moving right (should sum to one and all be positive)
+
         @param move_left - the probability of actually moving left
         @param move_right - the probability of actually moving right """
 
         # Bayes assignment
-        # TODO
-        #   Set self.move_probabilities["move_right"] = {...} to be a dictionary with the above probabilities
-        #     Yes, you can store dictionaries in dictionaries
+        
         # Check that the probabilities sum to one and are between 0 and 1
+        if (move_left + move_right) > 1:
+            raise ValueError("Probabilities sum to great than one")
+        if not ((0 < move_left < 1) or (0 < move_right < 1)):
+            raise ValueError("Individual probabilities not within 0 and 1")
 
-        # YOUR CODE HERE
+        #Probability for doing nothing can be calculated from left and right probabilities
+        do_nothing = 1 - (move_left + move_right)
 
-    def set_move_continuos_probabilities(self, sigma=0.1):
+        #   Set self.move_probabilities["move_right"] = {...} to be a dictionary with the above probabilities
+        self.move_probabilities["move_right"] =  {"left": move_left, "right": move_right, "do_nothing": do_nothing}
+
+    def set_move_continuous_probabilities(self, sigma=0.1):
         """ Set the noise for continuous movement
         Note - mean is zero for this assignment
         @param sigma - standard deviation of noise"""
 
         # Kalman assignment
-        # TODO
-        #   Set self.move_probabilities["move_continuous"] = {...} to be a dictionary with the above probabilities
-        # Check that sigma is positive
+        
+        if (sigma <= 0):
+            raise ValueError("Standard Dev must be positive")
 
-        # YOUR CODE HERE
+        #   Set self.move_probabilities["move_continuous"] = {...} to be a dictionary with the above probabilities
+        self.move_probabilities["move_continuous"] = {"sigma": sigma}
 
     # Just a helper function to place robot in middle of bin
     def _adjust_middle_of_bin(self, n_divs):
@@ -124,6 +138,39 @@ class RobotGroundTruth:
         ret_amount = (self.robot_loc + amount) - 1.0
         self.robot_loc = 1.0
         return ret_amount
+    
+    #Helper function from previous assignment to sample discrete variables
+    #(didn't want to basically copy and paste this 3 times)
+    def _sample_discrete_variable(self,info_variable):
+        """ Generate one sample from the given discrete variable distribution
+        Your code should NOT need to know what the actual keys are, how many there are, or what
+        the actual values are - i.e., your code should NOT include things like
+                if key == "True" or if z < 0.8
+        @param info_variable contains pairs of values with probabilities. Probabilites should sum to one
+        @returns one of the discrete values (keys) in the dictionary """
+
+        # First, I'll do some checks for you
+        for v in info_variable.values():
+            # Probabilities have to be between 0 and 1...
+            if v < 0.0 or v > 1.0:
+                ValueError(f"Value {v} not between zero and one")
+
+        # And they have to sum to one
+        if not np.isclose(sum(info_variable.values()), 1.0):
+            ValueError(f"Sum of probabilities should be 1, is {sum(info_variable.values())}")
+
+        # Now, use random to generate a number between 0 and one
+        zero_to_one = np.random.uniform()
+
+        #Iterate over the list of keys/value pairs, summing all the values
+        test_sum = 0
+        for key, value in  info_variable.items():
+            test_sum += value
+            #If the RNG value is less than the current sum, then it is within the 'range' assigned to that item
+            #(Passing through the loop implicitly checks that it is greater than the sum of all items before it)
+            if zero_to_one < test_sum:
+                #return the key and exit the for loop
+                return key
 
     def move_left(self, step_size):
         """ Move to the next bin to the left (probably)
@@ -131,11 +178,17 @@ class RobotGroundTruth:
         @return The amount actually moved """
 
         # Bayes assignment
-        # TODO
         #  Set step_dir to -1 (left), 0 (stay put) or 1 (right) based on sampling the move_left variable
-        step_dir = 0
+        rand_value = np.random.uniform()
+        key = self._sample_discrete_variable(self.move_probabilities["move_left"])
 
-        # YOUR CODE HERE
+        #set step_dir based on the returned key
+        if(key == "left"):
+            step_dir = -1
+        if (key == "right"):
+            step_dir = 1
+        if(key == "do_nothing"):
+            step_dir = 0
 
         # This returns the actual move amount, clamped to 0, 1
         #   i.e., don't run off the end of the hallway
@@ -147,11 +200,20 @@ class RobotGroundTruth:
         @return The amount actually moved """
 
         # Bayes assignment
-        # Set step_dir to -1 (left), 0 (stay put) or 1 (right) based on sampling the move_right variable
-        step_dir = 0
+        #  Set step_dir to -1 (left), 0 (stay put) or 1 (right) based on sampling the move_left variable
+        rand_value = np.random.uniform()
+        key = self._sample_discrete_variable(self.move_probabilities["move_right"])
 
-        # YOUR CODE HERE
+        #set step_dir based on the returned key
+        if(key == "left"):
+            step_dir = -1
+        if (key == "right"):
+            step_dir = 1
+        if(key == "do_nothing"):
+            step_dir = 0
 
+        # This returns the actual move amount, clamped to 0, 1
+        #   i.e., don't run off the end of the hallway
         return self._move_clamped_discrete(step_dir * step_size)
 
     def move_continuous(self, amount):
@@ -161,9 +223,7 @@ class RobotGroundTruth:
 
         # Kalman assignment
         # Set noisy_amount to be the amount to move, plus noise
-        noisy_amount = amount
-
-        # YOUR CODE HERE
+        noisy_amount = amount + np.random.normal(0,self.move_probabilities["move_continuous"]["sigma"])
 
         # Actually move (don't run off of end)
         return self._move_clamped_continuous(noisy_amount)
@@ -248,7 +308,7 @@ def test_continuous_move_functions(b_print=True):
     sigma = 0.1
     move_amount = -0.2
     n_samples = 10000
-    rgt.set_move_continuos_probabilities(sigma)
+    rgt.set_move_continuous_probabilities(sigma)
     for i in range(0, n_samples):
         rgt.robot_loc = 0.5
 
@@ -287,7 +347,7 @@ if __name__ == '__main__':
 
     # For Kalman/particle filter
     robot_gt.reset_location()
-    robot_gt.set_move_continuos_probabilities(0.2)
+    robot_gt.set_move_continuous_probabilities(0.2)
     ret_value = robot_gt.move_continuous(0.0)
     if 0.49 < ret_value < 0.61:
         print(f"Robot ground truth: Passed move continuous check")

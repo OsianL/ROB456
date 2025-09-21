@@ -57,7 +57,7 @@ def plot_with_path(im, im_threshhold, zoom=1.0, robot_loc=None, goal_loc=None, p
             axs[i].plot(goal_loc[0], goal_loc[1], '*g', markersize=10)
         if path is not None:
             for p, q in zip(path[0:-1], path[1:]):
-                axs[i].plot([p[0], q[0]], [p[1], q[1]], '-y', markersize=2)
+                axs[i].plot([p[0], q[0]], [p[1], q[1]], '-.y', markersize=4,color='green')
                 axs[i].plot(p[0], p[1], '.y', markersize=2)
         axs[i].axis('equal')
 
@@ -90,12 +90,28 @@ def is_unseen(im, pix):
 
 
 def is_free(im, pix):
-    """ Is the pixel empty?
+    """ Is the pixel empty? 
     @param im - the image
     @param pix - the pixel i,j"""
-    if im[pix[1], pix[0]] == 255:
-        return True
-    return False
+
+    #check if the pixel specified is occupied
+    pixel_check = (im[pix[1], pix[0]] == 255)
+
+    #return check result
+    return (pixel_check)
+
+def is_occupiable(im,pix,robot_width_pix):
+    """ Check if the pixel is far enough away 
+        from the walls for the robot?
+    """
+
+    #get the half length of the robot
+    d = int(np.ceil((robot_width_pix-1)/2))
+
+    #check if there are any walls in the zone the robot would occupy centered on the pixel specified
+    wall_check = not np.any(im[pix[1]-d:pix[1]+d,pix[0]-d:pix[0]+d] == 0)
+
+    return wall_check
 
 
 def convert_image(im, wall_threshold, free_threshold):
@@ -145,8 +161,7 @@ def eight_connected(pix):
             ret = pix[0] + i, pix[1] + j
             yield ret
 
-
-def dijkstra(im, robot_loc, goal_loc):
+def dijkstra(im, robot_loc, goal_loc,use_robot_width = False, robot_width_pix=10):
     """ Occupancy grid image, with robot and goal loc as pixels
     @param im - the thresholded image - use is_free(i, j) to determine if in reachable node
     @param robot_loc - where the robot is (tuple, i,j)
@@ -165,8 +180,12 @@ def dijkstra(im, robot_loc, goal_loc):
     priority_queue = []
     # Push the start node onto the queue
     #   push takes the queue itself, then a tuple with the first element the priority value and the second
-    #   being whatever data you want to keep - in this case, the robot location, which is a tuple
-    heapq.heappush(priority_queue, (0, robot_loc))
+    #   being whatever data you want to keep - in this case, the robot location, which is a tuple\
+    #Dijkstra:
+    #heapq.heappush(priority_queue, (0, robot_loc))
+    #A*:
+    initial_delta = np.hypot(goal_loc[0]-robot_loc[0],goal_loc[1]-robot_loc[1])
+    heapq.heappush(priority_queue, (initial_delta, robot_loc))
 
     # The power of dictionaries - we're going to use a dictionary to store every node we've visited, along
     #   with the node we came from and the current distance
@@ -190,34 +209,103 @@ def dijkstra(im, robot_loc, goal_loc):
         visited_parent = visited_triplet[1]
         visited_closed_yn = visited_triplet[2]
 
-        # TODO
+        # TODONE
         #  Step 1: Break out of the loop if node_ij is the goal node
+        if node_ij == goal_loc:
+            break
+
         #  Step 2: If this node is closed, skip it
-        #  Step 3: Set the node to closed
-        #    Now do the instructions from the slide (the actual algorithm)
+        #  Note: Doing this handles the multiple diff scored versions on queue problem
+        if not visited_closed_yn:
+            # Set the current node to closed
+            visited_closed_yn = True
+            visited[node_ij] = (visited_distance,visited_parent,visited_closed_yn)
+            
+            # Loop over the adjacent nodes, for each:
+            # check if the node is free on the map, if it is: 
+            #   check if a dictionary entry already exists, create one if not
+            #   check if the node has already been visited & closed 
+            #   otherwise, add the node + score to the queue
+            for adj_node in eight_connected(node_ij):
+
+                #Don't bother adding this to the que if we can't go there physically lol.
+                if not is_free(im,adj_node):
+                    continue
+
+                #Similiarly, skip the pixel if the robot can't fit (too close to a wall)
+                #use_robot_width=false disables this check
+                if use_robot_width and (not is_occupiable(im,adj_node,robot_width_pix)):
+                    continue
+
+                #calculate the marginal distances, accounting for diagonal distances
+                marginal_dist = np.sqrt(((adj_node[0] - node_ij[0])**2 ) + ((adj_node[1] - node_ij[1])**2))
+                adj_node_dist = marginal_dist + visited_distance
+
+                #Dijkstra Scoring:
+                #adj_node_score = adj_node_dist
+
+                #A* Scoring:
+                remaining_dist = np.hypot(goal_loc[0]-adj_node[0],goal_loc[1]-adj_node[1])
+                adj_node_score = adj_node_dist + remaining_dist
+
+                #Need to check if an entry already exists in visited:
+                if visited.get(adj_node) == None:
+                    #Create one if not
+                    visited[adj_node] = (adj_node_dist,node_ij,False)
+
+                #If it exists (or was just created) but hasn't been visited yet
+                if not visited[adj_node][2]:                    
+
+                    #Push the node onto the queue, messy but fine to have multiple in queue.
+                    heapq.heappush(priority_queue,(adj_node_score,adj_node))
+
+                    #update the node distance in visited if the new score is better 
+                    if  adj_node_dist < visited[adj_node][0]:
+                        visited[adj_node] = (adj_node_dist,node_ij,False)
+
+            #End of the core for loop. Apparently this should be doable without a for loop?
+                
         #  Lec 8_1: Planning, at the end
         #  https://docs.google.com/presentation/d/1pt8AcSKS2TbKpTAVV190pRHgS_M38ldtHQHIltcYH6Y/edit#slide=id.g18d0c3a1e7d_0_0
-        # YOUR CODE HERE
 
     # Now check that we actually found the goal node
     try_2 = goal_loc
     if not goal_loc in visited:
         # TODO: Deal with not being able to get to the goal loc
         # BEGIN SOLULTION
+        # Start with infinity
         best = 1e30
-        for v in visited:
-            if v[0] < best:
-                best = v[0]
-                try_2 = v[1]
-        return dijkstra(im, robot_loc, try_2)
+        # Compare all the visited points to find the one closest to the goal
+        # I think this only works for A* scoring methods, where the closest point to goal point has the minimal score/distance
+        for key, value in visited.items():
+            if value[0] < best:
+                best = value[0]
+                try_2 = key
+        # return the result of recursively running the function, with our new goal point being the closest we got this time around.
+        return dijkstra(im, robot_loc, try_2,use_robot_width,robot_width_pix)
+        #seems weird to have a value error here where it can never be run?
         raise ValueError(f"Goal {goal_loc} not reached")
         return []
 
     path = []
+    #Start with the endpoint
     path.append(goal_loc)
     # TODO: Build the path by starting at the goal node and working backwards
-    # YOUR CODE HERE
+    
+    #Doing a while loop since the number of iterations is variable
+    while True:
+        
+        #get the next parent node up the chain
+        next_parent_node = visited[path[-1]][1]
 
+        #starting node had it's parent set to None, so break once we see that.
+        if next_parent_node == None:
+            break
+        
+        #otherwise append the node to the path and continue up:
+        path.append(next_parent_node)
+
+    #returned path is a list of [i,j] points
     return path
 
 
@@ -229,7 +317,11 @@ def open_image(im_name):
     # Needed for reading in map info
     from os import open
 
+    #jupyter Notebook:
     im = imageio.imread("Data/" + im_name)
+
+    #if __name__== '__main__':
+    #im = imageio.imread("labs_and_final_project/Data/" + im_name)
 
     wall_threshold = 0.7
     free_threshold = 0.9
@@ -249,7 +341,8 @@ def open_image(im_name):
 
 if __name__ == '__main__':
     # Putting this here because in JN it's yaml
-    import yaml_1 as yaml
+    import yaml
+    import matplotlib.pyplot as plt
 
     # Use one of these
 
@@ -280,6 +373,6 @@ if __name__ == '__main__':
 
     # Depending on if your mac, windows, linux, and if interactive is true, you may need to call this to get the plt
     # windows to show
-    # plt.show()
+    plt.show()
 
     print("Done")

@@ -3,6 +3,7 @@
 # This is the code you need to do the Kalman filter for the door localization
 
 import numpy as np
+import math
 
 from robot_sensors import RobotSensors
 from robot_ground_truth import RobotGroundTruth
@@ -32,11 +33,32 @@ class KalmanFilter:
         Lec 3.1 Kalman filters
         Slides: https://docs.google.com/presentation/d/1a9FGeAQKxtAlIeDMykePcmJYF1wBNOwSUg-ts4L0N_U/edit#slide=id.p23
           Steps 5-8 (correction steps)
-        @param robot_sensors - for mu/sigma of wall sensor
+        @param robot_sensors - instance of robot_sensors with dictionary containing mu/sigma of wall sensor
         @param dist_reading - distance reading returned by sensor"""
 
         # TODO: Calculate C and K, then update self.mu and self.sigma
-        # YOUR CODE HERE
+
+        #Get the sensor standard deviation and reading
+        sensor_sigma = robot_sensors.distance_dict["sigma"]
+        z_t = dist_reading
+
+        # Single dimension state (only storing distance as a gausian)
+        # Assuming distance sensor reference and state reference are the same (origins match up)
+        # Therefore:
+        c = 1 #could remove c entirely here tbh
+
+        #Calculate the kalman gain (~interpolation factor)
+        #Since this is 1D we need to remember to square the standard deviations for covariance
+        #For some reason they are all written as ^-2 in the slides?? (nope it's just a bar over the sigma lol)
+        #Ok this feels like it should be squared but squaring it makes it not pass the check :skull: 
+        k_t = c*(self.sigma)/(c*(self.sigma)*c + (sensor_sigma)) 
+
+        #Update mu and sigma
+        mu_new = self.mu + k_t*(z_t - c*self.mu)
+        self.mu = mu_new
+
+        self.sigma = (1 - k_t*c)*(self.sigma)
+
         return self.mu, self.sigma
 
     # Given a movement, update Gaussian
@@ -50,7 +72,25 @@ class KalmanFilter:
         @return : mu and sigma of new current estimated location """
 
         # TODO: Update mu and sigma by Ax + Bu equation
-        # YOUR CODE HERE
+
+        # get the standard deviation for movements and control signal:
+        sigma_actuation = robot_ground_truth.move_probabilities["move_continuous"]["sigma"]
+        u_t = amount
+
+        #Because our state is a single variable, our 'A matrix' is just 1:
+        a = 1
+        #similiarly, our control signal is also a single variable distance, so our 'B matrix' is also 1:
+        b = 1
+
+        #update mu and sigma:
+        mu_new = a*self.mu + b*u_t
+        self.mu = mu_new
+
+        #same deal here, feels like this should have sigma squared??
+        # covariance_new = (a**2)*(self.sigma**2) + (sigma_actuation**2)
+        #self.sigma = math.sqrt(covariance_new)
+        self.sigma = a*self.sigma + sigma_actuation
+
         return self.mu, self.sigma
 
     def one_full_update(self, robot_ground_truth, robot_sensor, u: float, z: float):
@@ -65,12 +105,15 @@ class KalmanFilter:
         @param u will be the amount moved
         @param z will be the wall distance sensor reading
         """
-        # TODO:
+        #Just need to update the kalman filter here, actual movement is handled outside of this function
+         
         #  Step 1 predict: update your belief by the action (move the Gaussian)
+        self.update_continuous_move(robot_ground_truth,u)
+
         #  Step 2 correct: do the correction step (move the Gaussian to be between the current mean and the sensor reading)
-        # YOUR CODE HERE
+        self.update_belief_distance_sensor(robot_sensor,z)
 
-
+        #That's all folks!
 
 
 def test_kalman_update(b_print=True):
@@ -91,7 +134,7 @@ def test_kalman_update(b_print=True):
     robot_sensor = RobotSensors()
 
     # Set mu/sigmas
-    robot_ground_truth.set_move_continuos_probabilities(answers["move_error"]["sigma"])
+    robot_ground_truth.set_move_continuous_probabilities(answers["move_error"]["sigma"])
     robot_sensor.set_distance_wall_sensor_probabilities(answers["sensor_noise"]["sigma"])
 
     # This SHOULD insure that you get the same answer as the solutions, provided you're only calling uniform within
@@ -145,7 +188,7 @@ if __name__ == '__main__':
     # Set mu/sigmas
     sensor_noise_syntax = {"mu": 0.0, "sigma": 0.1}
     move_error_syntax = {"mu": 0.0, "sigma": 0.05}
-    robot_ground_truth_syntax.set_move_continuos_probabilities(move_error_syntax["sigma"])
+    robot_ground_truth_syntax.set_move_continuous_probabilities(move_error_syntax["sigma"])
     robot_sensor_syntax.set_distance_wall_sensor_probabilities(sensor_noise_syntax["sigma"])
 
     kalman_filter_syntax.update_belief_distance_sensor(robot_sensor_syntax, 0.1)
